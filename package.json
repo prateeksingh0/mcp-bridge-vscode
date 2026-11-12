@@ -1,0 +1,72 @@
+{
+  "name": "mcp-bridge-vscode",
+  "displayName": "MCP Bridge for VS Code",
+  "description": "Let an MCP client (such as Claude Desktop) work in VS Code: files, a visible terminal, git, diagnostics and more, with approvals for risky actions.",
+  "version": "0.3.1",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": { "vscode": "^1.93.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Tools stay disabled in Restricted Mode unless mcpBridge.allowInUntrustedWorkspace is enabled (user settings only)."
+    }
+  },
+  "contributes": {
+    "commands": [
+      { "command": "mcpBridge.connectClaudeDesktop", "title": "MCP Bridge: Connect to Claude Desktop" },
+      { "command": "mcpBridge.disconnectClaudeDesktop", "title": "MCP Bridge: Disconnect from Claude Desktop" },
+      { "command": "mcpBridge.showLog", "title": "MCP Bridge: Show Log" },
+      { "command": "mcpBridge.showAuditLog", "title": "MCP Bridge: Show Audit Log" },
+      { "command": "mcpBridge.togglePause", "title": "MCP Bridge: Pause / Resume AI Access" }
+    ],
+    "configuration": {
+      "title": "MCP Bridge",
+      "properties": {
+        "mcpBridge.approvalMode": {
+          "type": "string",
+          "scope": "machine",
+          "default": "chat-and-vscode",
+          "enum": ["chat-and-vscode", "chat-only", "vscode-only", "off"],
+          "enumDescriptions": [
+            "Risky actions need approval in chat; the highest-risk ones also need a VS Code confirmation box (recommended).",
+            "Approval in chat only. Faster, but the server cannot verify a human clicked.",
+            "VS Code confirmation box only.",
+            "No approvals. Not recommended."
+          ],
+          "description": "How risky actions are approved."
+        },
+        "mcpBridge.allowedRoots": {
+          "type": "array",
+          "scope": "machine",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra folders where file writes need no approval (workspace folders are always allowed)."
+        },
+        "mcpBridge.allowInUntrustedWorkspace": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": false,
+          "description": "Let tools run even in Restricted Mode. Risky; off by default."
+        },
+        "mcpBridge.redactSecrets": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": true,
+          "description": "Mask API keys, tokens and private keys in tool output before it is sent to the AI."
+        },
+        "mcpBridge.protectedPaths": {
+          "type": "array",
+          "scope": "machine",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra paths or patterns (* wildcard) that need approval to read or change, in addition to the built-in credential locations (.ssh, .aws, .env files, keys and similar)."
+        },
+        "mcpBridge.maxTerminals": { "type": "number", "default": 3, "minimum": 1, "maximum": 10, "description": "Maximum terminals the bridge keeps open." },
+        "mcpBridge.idleMinutes": { "type": "number", "default": 30, "minimum": 1, "description": "Close bridge terminals idle for this many minutes." }
+      }
+    }
+  }
+}

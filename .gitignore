@@ -1,0 +1,14 @@
+# Build output
+*.vsix
+
+# Dependencies
+node_modules/
+
+# Editor and OS files
+.vscode-test/
+.DS_Store
+Thumbs.db
+
+# Logs and backups
+*.log
+*.bak
