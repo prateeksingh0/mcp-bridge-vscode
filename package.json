@@ -2,7 +2,7 @@
   "name": "mcp-bridge-vscode",
   "displayName": "MCP Bridge for VS Code",
   "description": "Let an MCP client (such as Claude Desktop) work in VS Code: files, a visible terminal, git, diagnostics and more, with approvals for risky actions.",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "publisher": "local",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/prateeksingh0/mcp-bridge-vscode.git" },
@@ -66,6 +66,13 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Extra paths or patterns (* wildcard) that need approval to read or change, in addition to the built-in credential locations (.ssh, .aws, .env files, keys and similar)."
+        },
+        "mcpBridge.extraInstructions": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "editPresentation": "multilineText",
+          "description": "Your own rules for the AI, one per line (for example: Always ask before git push). They are added to the bridge's instructions. They cannot switch off approvals or protections, which the extension enforces itself. Takes effect the next time Claude Desktop connects (restart it)."
         },
         "mcpBridge.maxTerminals": { "type": "number", "default": 3, "minimum": 1, "maximum": 10, "description": "Maximum terminals the bridge keeps open." },
         "mcpBridge.idleMinutes": { "type": "number", "default": 30, "minimum": 1, "description": "Close bridge terminals idle for this many minutes." }

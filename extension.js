@@ -7,6 +7,8 @@ const path = require('path');
 const termutil = require('./termutil');
 const search = require('./search');
 const runner = require('./runner');
+const rules = require('./rules');
+const ledgerlib = require('./ledger');
 const crypto = require('crypto');
 const safety = require('./safety');
 const claudeConfig = require('./claudeconfig');
@@ -16,6 +18,7 @@ const WIN_DIR = path.join(DIR, 'windows');
 const TOOLS = path.join(DIR, 'tools.json');
 const INSTR = path.join(DIR, 'instructions.txt');
 const WIN_FILE = path.join(WIN_DIR, process.pid + '.json');
+const ledger = ledgerlib.createLedger(path.join(DIR, 'ledger.json'));
 const TOKEN = crypto.randomBytes(24).toString('hex');
 const MAX_RESULT = 60000;
 const APPROVAL_TTL = 10 * 60 * 1000;
@@ -110,6 +113,8 @@ function getText(p) {
 async function setContent(p, text, show = true) {
   const u = uri(p);
   const exists = fs.existsSync(u.fsPath);
+  const created = exists ? null : ledgerlib.firstMissing(u.fsPath);
+  if (created) ledger.add(created, 'write_file');
   if (!exists) {
     fs.mkdirSync(path.dirname(u.fsPath), { recursive: true });
     fs.writeFileSync(u.fsPath, text);
@@ -254,14 +259,14 @@ async function termRun(command, opts) {
 }
 
 // ---------- TOOLS: workspace ----------
-tool('get_workspace', 'Overview: workspace folders, active file, open tabs, terminals, git branch, trust state, OS. Call this first to confirm the window.', {}, [], async () => {
+tool('get_workspace', 'Overview: workspace folders, active file, open tabs, terminals, git branch, trust state, OS. Call this first to confirm the window. Also call get_instructions once per session to read the rules the user set.', {}, [], async () => {
   const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
   const active = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.document.uri.fsPath : null;
   const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs.map(t => t.input && t.input.uri && t.input.uri.fsPath).filter(Boolean));
   const branch = folders[0] ? termutil.gitBranch(folders[0]) : null;
-  return { pid: process.pid, folders, active, tabs, terminals: [...terms.keys()], branch, trusted: vscode.workspace.isTrusted, platform: process.platform, shell: vscode.env.shell, vscode: vscode.version };
+  return { pid: process.pid, folders, active, tabs, terminals: [...terms.keys()], sessionFiles: ledger.list().length, branch, trusted: vscode.workspace.isTrusted, platform: process.platform, shell: vscode.env.shell, vscode: vscode.version };
 });
-tool('open_folder', 'Open a folder in VS Code. Reuses the current window unless new_window is true.',
+tool('open_folder', 'Open a folder in VS Code. Reuses the current window unless new_window is true. Do not open new windows unless the user asks.',
   { path: P, new_window: bool('Default false') }, ['path'], async ({ path: p, new_window = false }) => {
     const target = abs(p);
     if (!fs.existsSync(target)) throw new Error('Folder not found: ' + target);
@@ -282,19 +287,19 @@ tool('find_files', 'Find files by glob in the workspace, e.g. **/*.py', { glob: 
     const r = await vscode.workspace.findFiles(glob, '**/{node_modules,.git,.venv,venv,target}/**', max);
     return r.map(u => u.fsPath).join('\n') || 'No matches (needs an open workspace folder)';
   });
-tool('read_file', 'Read a text file with line numbers (includes unsaved editor changes).',
+tool('read_file', 'Read a text file with line numbers (includes unsaved editor changes). Do not read secrets (.env, keys, tokens) unless the user explicitly asks.',
   { path: P, start_line: num('1-based, default 1'), end_line: num('Default: end of file') }, ['path'],
   async ({ path: p, start_line = 1, end_line = 0 }) => {
     const lines = getText(p).split(/\r?\n/);
     const end = end_line || lines.length;
     return lines.slice(start_line - 1, end).map((l, i) => (start_line + i) + ': ' + l).join('\n');
   });
-tool('write_file', 'Create or overwrite a file (parent folders auto-created). Shown live in the editor.',
+tool('write_file', 'Create or overwrite a file (parent folders auto-created). Shown live in the editor. Delete temporary or test files you create before you finish (see list_session_files).',
   { path: P, content: str('Full file content') }, ['path', 'content'], async ({ path: p, content }) => {
     await setContent(p, content);
     return 'Wrote ' + content.length + ' chars to ' + abs(p);
   });
-tool('append_file', 'Append text to a file.', { path: P, content: str('Text to append') }, ['path', 'content'],
+tool('append_file', 'Append text to a file. Delete temporary or test files you create before you finish (see list_session_files).', { path: P, content: str('Text to append') }, ['path', 'content'],
   async ({ path: p, content }) => {
     await setContent(p, (fs.existsSync(abs(p)) ? getText(p) : '') + content);
     return 'Appended to ' + abs(p);
@@ -315,8 +320,10 @@ tool('edit_file', 'Apply find/replace edits. Each "old" must match exactly once 
     await setContent(p, text);
     return 'Applied ' + edits.length + ' edit(s) to ' + abs(p);
   });
-tool('create_dir', 'Create a folder (and parents).', { path: P }, ['path'], async ({ path: p }) => {
+tool('create_dir', 'Create a folder (and parents). Delete temporary or test folders you create before you finish (see list_session_files).', { path: P }, ['path'], async ({ path: p }) => {
+  const made = ledgerlib.firstMissing(abs(p));
   await vscode.workspace.fs.createDirectory(uri(p));
+  if (made) ledger.add(made, 'create_dir');
   return 'Created ' + abs(p);
 });
 tool('move_path', 'Move/rename a file or folder (VS Code updates imports where it can).',
@@ -325,12 +332,15 @@ tool('move_path', 'Move/rename a file or folder (VS Code updates imports where i
     const e = new vscode.WorkspaceEdit();
     e.renameFile(uri(src), uri(dest), { overwrite });
     if (!(await vscode.workspace.applyEdit(e))) throw new Error('Move failed');
+    ledger.renamePrefix(abs(src), abs(dest));
     return 'Moved to ' + abs(dest);
   });
-tool('copy_path', 'Copy a file or folder.', { src: P, dest: P, overwrite: bool('Default false') }, ['src', 'dest'],
+tool('copy_path', 'Copy a file or folder. Delete temporary or test copies you create before you finish (see list_session_files).', { src: P, dest: P, overwrite: bool('Default false') }, ['src', 'dest'],
   async ({ src, dest, overwrite = false }) => {
     fs.mkdirSync(path.dirname(abs(dest)), { recursive: true });
+    const made = ledgerlib.firstMissing(abs(dest));
     await vscode.workspace.fs.copy(uri(src), uri(dest), { overwrite });
+    if (made) ledger.add(made, 'copy_path');
     return 'Copied to ' + abs(dest);
   });
 tool('delete_path', 'Delete a file or folder (moved to the trash, so it is recoverable). Needs approval.',
@@ -416,7 +426,7 @@ tool('rename_symbol', 'Rename a symbol everywhere using the language server.', {
   });
 
 // ---------- TOOLS: terminal ----------
-tool('terminal_run', 'Run a command in a VS Code terminal the user can watch live; returns output and exit code. Reuse the default terminal; use a different "name" only for long-running jobs like dev servers.',
+tool('terminal_run', 'Run a command in a VS Code terminal the user can watch live; returns output and exit code. Reuse the default terminal; use a different "name" only for long-running jobs like dev servers. Never run commands any other way. Close extra terminals with terminal_close when done.',
   { command: str('Command line'), cwd: P, name: str('Terminal name, default "main"'), timeout: num('Seconds to wait, default 60'), venv: str('Optional venv folder to use for this command, e.g. .venv') },
   ['command'], async args => termRun(args.command, args));
 tool('terminal_read', 'Latest output of a terminal started with terminal_run.', { name: str('Default "main"') }, [], async ({ name = 'main' }) => {
@@ -439,11 +449,13 @@ tool('terminal_close', 'Close a bridge terminal.', { name: str('Default "main"')
 tool('terminal_list', 'List bridge terminals with their real VS Code names.', {}, [], async () => [...terms.entries()].map(([k, e]) => k + ' (' + (e.running ? 'running' : 'idle') + ') name="' + e.t.name + '" cwd=' + e.cwd).join('\n') || 'None');
 
 // ---------- TOOLS: python ----------
-tool('python_create_venv', 'Create a Python virtualenv. Use the "venv" option of terminal_run to run commands inside it.',
+tool('python_create_venv', 'Create a Python virtualenv. Use the "venv" option of terminal_run to run commands inside it. Delete a throwaway venv before you finish (see list_session_files).',
   { path: str('Venv folder, e.g. .venv'), python: str('Python executable, default python/python3') }, ['path'],
   async ({ path: p, python }) => {
     const exe = python || (process.platform === 'win32' ? 'python' : 'python3');
+    const made = ledgerlib.firstMissing(abs(p));
     const r = await sh(exe, ['-m', 'venv', abs(p)], root(), 300000);
+    if (made && fs.existsSync(made)) ledger.add(made, 'python_create_venv');
     if (r.missing) throw new Error(exe + ' not found');
     return r.code === 0 ? 'Created venv at ' + abs(p) : 'Failed: ' + (r.stderr || r.stdout);
   });
@@ -515,6 +527,26 @@ tool('debug_start', 'Start debugging with a launch.json config name, or an inlin
   });
 tool('debug_stop', 'Stop the debug session.', {}, [], async () => { await vscode.debug.stopDebugging(); return 'Stopped'; });
 
+// ---------- TOOLS: session cleanup and instructions ----------
+tool('list_session_files', 'List files and folders this bridge created during this session that still exist. Call it before you finish, and move temporary or test files to the trash with cleanup_session. Never clean up real deliverables the user asked for.', {}, [], async () => {
+  const items = ledger.list();
+  if (!items.length) return 'No files created by the bridge are left over.';
+  return items.map(i => i.path + '  (' + i.tool + ', ' + i.ageMinutes + ' min ago)').join(String.fromCharCode(10));
+});
+tool('cleanup_session', 'Move files or folders that the bridge created during this session to the trash. Pass the exact paths from list_session_files; any other path is refused. Needs approval.',
+  { paths: { type: 'array', items: { type: 'string' }, description: 'Exact paths from list_session_files' } }, ['paths'], async ({ paths }) => {
+    const full = (paths || []).map(abs);
+    if (!full.length) throw new Error('No paths given');
+    const bad = ledger.untracked(full);
+    if (bad.length) throw new Error('Refusing: not created by the bridge in this session: ' + bad.join(', '));
+    for (const t of full) {
+      if (fs.existsSync(t)) await vscode.workspace.fs.delete(vscode.Uri.file(t), { recursive: true, useTrash: true });
+      ledger.remove(t);
+    }
+    return 'Moved to trash: ' + full.join(', ');
+  });
+tool('get_instructions', 'Returns the rules the user set for how you must work in their VS Code: terminals, approvals, cleanup and their own rules. Call it once at the start of a session.', {}, [], async () => buildInstructions());
+
 // ---------- TOOLS: approvals + batch ----------
 tool('request_approval', 'Step 1 for risky actions. Describe the exact tool call you intend to make; returns an approval_id and the text for the approval card to show the user.',
   { tool: str('Name of the tool you want to call'), args: { type: 'object', description: 'The exact arguments of the intended call' } }, ['tool', 'args'],
@@ -549,8 +581,8 @@ tool('batch', 'Run several tools in ONE call (faster). Each call is {tool, args}
 // ---------- classification, gates, dispatcher ----------
 // read = never changes anything. crit = irreversible or runs arbitrary code. everything else = reversible writes
 // (editor undo, git, trash, checkpoint).
-const READ = new Set(['get_workspace', 'list_files', 'find_files', 'read_file', 'search', 'get_active_editor', 'get_diagnostics', 'go_to_definition', 'find_references', 'hover', 'document_symbols', 'workspace_symbols', 'terminal_read', 'terminal_list', 'git_status', 'git_diff', 'git_log', 'extension_list', 'get_setting', 'list_vscode_commands', 'list_tasks', 'request_approval']);
-const CRIT = new Set(['delete_path', 'terminal_run', 'git', 'gh', 'extension_install', 'extension_uninstall', 'run_vscode_command', 'update_setting', 'run_task', 'debug_start', 'batch']);
+const READ = new Set(['get_workspace', 'list_files', 'find_files', 'read_file', 'search', 'get_active_editor', 'get_diagnostics', 'go_to_definition', 'find_references', 'hover', 'document_symbols', 'workspace_symbols', 'terminal_read', 'terminal_list', 'git_status', 'git_diff', 'git_log', 'extension_list', 'get_setting', 'list_vscode_commands', 'list_tasks', 'request_approval', 'list_session_files', 'get_instructions']);
+const CRIT = new Set(['delete_path', 'terminal_run', 'git', 'gh', 'extension_install', 'extension_uninstall', 'run_vscode_command', 'update_setting', 'run_task', 'debug_start', 'batch', 'cleanup_session']);
 const OPEN = new Set(['gh', 'git', 'extension_install']);
 
 const protectedGate = paths => a => {
@@ -564,6 +596,7 @@ const outsideGate = paths => a => {
 };
 const GATES = {
   delete_path: a => ({ level: 'high', summary: 'Move to trash: ' + abs(a.path) + (a.recursive ? ' (recursive)' : '') }),
+  cleanup_session: a => ({ level: 'high', summary: 'Move to trash ' + (a.paths || []).length + ' item(s) the bridge created this session: ' + (a.paths || []).map(abs).join(', ') }),
   extension_install: a => ({ level: 'high', summary: 'Install extension: ' + a.id }),
   extension_uninstall: a => ({ level: 'high', summary: 'Uninstall extension: ' + a.id }),
   run_vscode_command: a => ({ level: 'high', summary: 'Run VS Code command: ' + a.command + ' ' + JSON.stringify(a.args || []).slice(0, 200) }),
@@ -651,6 +684,8 @@ function buildInstructions() {
   return [
     'You control the user\'s VS Code through this server. Follow these rules.',
     '',
+    'CHECK PHRASE: if the user asks for the bridge check phrase, answer exactly: copper-lantern-4821',
+    '',
     'WINDOWS',
     '- Start each session with get_workspace (or list_windows) and confirm you are in the intended window. If several windows are open, pass target (a folder path) to choose.',
     '- Do not open new windows. open_folder reuses the current window unless the user asks for a new one.',
@@ -671,10 +706,11 @@ function buildInstructions() {
     '- Every call is written to an audit log that the user can open.',
     '',
     'KEEP THE WORKSPACE CLEAN',
-    '- Do not leave scratch or test files behind. Delete temporary files you created (ask first if unsure).',
+    '- Do not leave scratch or test files behind. Before you finish, call list_session_files and move temporary or test files you created to the trash with cleanup_session (it needs approval). Never clean up files the user asked you to create.',
     '- Work inside the user\'s project folder. Ask before writing elsewhere.',
     '- Prefer edit_file over rewriting whole files. Use batch for multi-step work. Keep outputs small.',
     '- Finish with a short summary of what you changed.',
+    ...rules.userRulesLines(cfg().get('extraInstructions', '')),
   ].join('\n');
 }
 
@@ -841,6 +877,7 @@ function activate(ctx) {
     out, statusItem, { dispose: () => server.close() }, { dispose: () => clearInterval(sweep) },
     vscode.window.onDidChangeWindowState(s => { if (s.focused) { focusedAt = Date.now(); publish(); } }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => publish()),
+    vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('mcpBridge')) { try { fs.writeFileSync(INSTR, buildInstructions()); } catch {} } }),
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
       statusItem.text = idleText();
       publish();

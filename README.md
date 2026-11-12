@@ -75,6 +75,19 @@ Be aware of the limits:
 - **Trusted folders only:** in Restricted Mode the tools are disabled.
 - **Local only:** the bridge listens on `127.0.0.1` with a random per-window token. The tokens are stored in `~/.mcp-bridge/windows/`, so any program running as your user could read them.
 
+## Rules for the AI
+
+The bridge tells the AI how to behave in your VS Code. There are four layers, because not every client passes server instructions to the model:
+
+1. **Enforced by the extension** (works whatever the AI does): approvals, pause, protected paths, secret redaction, and every command running in a visible terminal.
+2. **Rules inside the tool descriptions.** The AI always sees these, for example "delete temporary files you create" on the file tools.
+3. **The instructions**, written to `~/.mcp-bridge/instructions.txt` and sent when Claude Desktop connects. The AI can also read them on demand with the `get_instructions` tool.
+4. **Your own rules:** type them, one per line, in the setting `mcpBridge.extraInstructions` (user settings only). They are added to the instructions, but they cannot switch off approvals or protections.
+
+**Keeping the workspace clean.** The bridge remembers files and folders it creates. `list_session_files` shows what is left, and `cleanup_session` moves the ones you approve to the trash. It refuses any path the bridge did not create. Files created by shell commands are not tracked.
+
+**Check that your client delivers the instructions.** Start a new chat and ask: "What is the vscode-bridge check phrase?" If the AI answers `copper-lantern-4821`, it received the instructions. If not, it relies on the tool descriptions and `get_instructions`.
+
 ## Settings
 
 | Setting | Default | Meaning |
@@ -84,6 +97,7 @@ Be aware of the limits:
 | `mcpBridge.allowInUntrustedWorkspace` | `false` | Let tools run in Restricted Mode (not recommended) |
 | `mcpBridge.redactSecrets` | `true` | Mask secrets in tool output |
 | `mcpBridge.protectedPaths` | `[]` | Extra protected paths or patterns (`*` wildcard) |
+| `mcpBridge.extraInstructions` | empty | Your own rules for the AI, one per line (user settings only) |
 | `mcpBridge.maxTerminals` | `3` | Maximum terminals the bridge keeps open |
 | `mcpBridge.idleMinutes` | `30` | Close idle bridge terminals after this long |
 
@@ -125,7 +139,7 @@ npx @vscode/vsce package --allow-missing-repository
 
 - `extension.js`: the VS Code side (tools, approvals, status bar, commands)
 - `shim.js`: the MCP server that Claude Desktop runs over stdio
-- `safety.js`, `claudeconfig.js`, `termutil.js`, `search.js`, `runner.js`: helpers with tests in `test/`
+- `safety.js`, `claudeconfig.js`, `termutil.js`, `search.js`, `runner.js`, `ledger.js`, `rules.js`: helpers with tests in `test/`
 
 ## License
 
