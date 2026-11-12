@@ -9,7 +9,7 @@ const path = require('node:path');
 const root = path.join(__dirname, '..');
 const forbidden = /child_process|\bexecFile(Sync)?\b|\bexecSync\b|\bspawn(Sync)?\b|\bfork\(/;
 
-for (const file of ['extension.js', 'safety.js', 'claudeconfig.js', 'termutil.js', 'search.js', 'runner.js', 'ledger.js', 'rules.js', 'commitguard.js']) {
+for (const file of ['extension.js', 'safety.js', 'claudeconfig.js', 'termutil.js', 'search.js', 'runner.js', 'ledger.js', 'rules.js', 'commitguard.js', 'launchenv.js']) {
   test(file + ' starts no hidden processes', () => {
     const src = fs.readFileSync(path.join(root, file), 'utf8');
     assert.ok(!forbidden.test(src), file + ' must not start processes outside a visible terminal');

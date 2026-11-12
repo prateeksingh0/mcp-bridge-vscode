@@ -10,7 +10,7 @@ const DIR = path.join(os.homedir(), '.mcp-bridge');
 const WIN_DIR = path.join(DIR, 'windows');
 const TOOLS = path.join(DIR, 'tools.json');
 const INSTR = path.join(DIR, 'instructions.txt');
-const VERSION = '0.3.0';
+const VERSION = '0.7.3';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const pending = new Set(); // requests that are still being handled
 const byFocus = (a, b) => (b.focusedAt || 0) - (a.focusedAt || 0);
@@ -74,11 +74,24 @@ function launchVsCode() {
         // The variable that makes VS Code behave like Node must not be passed on, or the new process would just exit.
         const env = { ...process.env };
         delete env.ELECTRON_RUN_AS_NODE;
+        if (process.platform === 'linux') {
+          // Claude Desktop starts the shim with a trimmed environment that has no display settings, so VS Code
+          // would have no screen to open on. Borrow them from the file the extension saved, or from Claude Desktop.
+          try {
+            const le = require('./launchenv');
+            let saved = {};
+            try { saved = JSON.parse(fs.readFileSync(path.join(DIR, 'display-env.json'), 'utf8')); } catch {}
+            let parentEnv = {};
+            try { parentEnv = le.parseEnviron(fs.readFileSync('/proc/' + process.ppid + '/environ', 'utf8')); } catch {}
+            Object.assign(env, le.displayEnvToAdd({ env: process.env, saved, parentEnv, uid: process.getuid ? process.getuid() : null, exists: fs.existsSync }));
+          } catch {}
+        }
         const viaElectron = !!process.versions.electron;
         const launchCommand = viaElectron ? process.execPath : 'code';
-        spawn(launchCommand, [], { shell: !viaElectron, detached: true, stdio: 'ignore', windowsHide: true, env }).unref();
+        // The hide-window flag is only for the throwaway "code" helper. Applied to VS Code itself it makes the window invisible.
+        spawn(launchCommand, [], { shell: !viaElectron, detached: true, stdio: 'ignore', windowsHide: !viaElectron, env }).unref();
       } catch {}
-      for (let i = 0; i < 80; i++) {
+      for (let i = 0; i < 180; i++) {
         await sleep(500);
         const ws = windows();
         if (ws.length && (await ping(ws[0]))) return;

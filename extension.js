@@ -10,6 +10,7 @@ const runner = require('./runner');
 const rules = require('./rules');
 const ledgerlib = require('./ledger');
 const commitguard = require('./commitguard');
+const launchenv = require('./launchenv');
 const crypto = require('crypto');
 const safety = require('./safety');
 const claudeConfig = require('./claudeconfig');
@@ -782,6 +783,7 @@ function installShim(ctx) {
   fs.mkdirSync(DIR, { recursive: true });
   const dst = path.join(DIR, 'shim.js');
   fs.copyFileSync(path.join(ctx.extensionPath, 'shim.js'), dst);
+  fs.copyFileSync(path.join(ctx.extensionPath, 'launchenv.js'), path.join(DIR, 'launchenv.js'));
   return dst;
 }
 
@@ -920,6 +922,8 @@ function activate(ctx) {
     fs.mkdirSync(WIN_DIR, { recursive: true });
     installShim(ctx);
     fs.writeFileSync(TOOLS, JSON.stringify(manifest()));
+    // On Linux, remember the display settings so the shim can start VS Code later (see launchenv.js).
+    if (process.platform === 'linux') fs.writeFileSync(path.join(DIR, 'display-env.json'), JSON.stringify(launchenv.pickDisplayVars(process.env)), { mode: 0o600 });
     fs.writeFileSync(INSTR, buildInstructions());
   } catch (e) { log('setup failed: ' + e.message); }
 

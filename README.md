@@ -223,6 +223,7 @@ Every tool carries safety hints (read-only, or destructive for the risky ones), 
 - **The status bar says "paused".** Click it to resume.
 - **Wrong window.** Call `list_windows`, then pass `target` (a folder path or process id). By default the most recently focused window is used.
 - **"Output NOT captured".** VS Code's shell integration had not started in that terminal, which can happen right after a window opens. The command still ran. Check the terminal or verify through files.
+- **VS Code is closed and the AI cannot use it.** The bridge starts VS Code for you on the first request and waits up to 90 seconds. On Linux it reuses your desktop's display settings, which the extension saves the first time VS Code runs with it, so open VS Code once after installing. Versions before 0.7.3 started VS Code invisibly on Windows and could not start it at all on Linux; if you are on one of those, open VS Code yourself before asking the AI to use it.
 - **The AI keeps asking for approval.** Approvals work once and expire after 10 minutes. Check `mcpBridge.approvalMode`.
 - **Connect cannot find your Claude Desktop config.** Choose the file by hand when asked. It must be named `claude_desktop_config.json`. The command also offers to repair the entry if VS Code was moved or reinstalled.
 - **Windows PowerShell 5.1** (the default shell on Windows): chain commands with `;` instead of `&&`.

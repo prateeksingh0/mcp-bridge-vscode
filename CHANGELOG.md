@@ -2,6 +2,13 @@
 
 All notable changes to this project are listed here. The project follows [Semantic Versioning](https://semver.org/).
 
+## 0.7.3
+
+### Fixed
+- On Windows, VS Code started by the bridge opened invisibly. A hide-window flag meant for a helper script was applied to VS Code itself from 0.6.0 on. VS Code now opens normally.
+- On Linux, the bridge could not start VS Code, because Claude Desktop gives the shim no display settings. The extension now saves them (the first time VS Code runs with it), and the shim reuses them, or borrows them from Claude Desktop, when it has to start VS Code.
+- The shim waits up to 90 seconds for VS Code to start instead of 40, for slow computers and virtual machines.
+
 ## 0.7.2
 
 ### Added
