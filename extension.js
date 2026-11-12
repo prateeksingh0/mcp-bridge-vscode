@@ -436,7 +436,7 @@ tool('terminal_close', 'Close a bridge terminal.', { name: str('Default "main"')
   terms.delete(name);
   return 'Closed ' + name;
 });
-tool('terminal_list', 'List bridge terminals.', {}, [], async () => [...terms.entries()].map(([k, e]) => k + ' (' + (e.running ? 'running' : 'idle') + ') cwd=' + e.cwd).join('\n') || 'None');
+tool('terminal_list', 'List bridge terminals with their real VS Code names.', {}, [], async () => [...terms.entries()].map(([k, e]) => k + ' (' + (e.running ? 'running' : 'idle') + ') name="' + e.t.name + '" cwd=' + e.cwd).join('\n') || 'None');
 
 // ---------- TOOLS: python ----------
 tool('python_create_venv', 'Create a Python virtualenv. Use the "venv" option of terminal_run to run commands inside it.',
