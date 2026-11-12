@@ -9,6 +9,7 @@ const search = require('./search');
 const runner = require('./runner');
 const rules = require('./rules');
 const ledgerlib = require('./ledger');
+const commitguard = require('./commitguard');
 const crypto = require('crypto');
 const safety = require('./safety');
 const claudeConfig = require('./claudeconfig');
@@ -100,6 +101,31 @@ async function cli(file, args, cwd, timeout) {
   if (r.missing) throw new Error(file + ' not found on PATH');
   const body = (r.stdout + r.stderr).trim() || '(no output)';
   return (r.code === 0 ? '' : 'exit code ' + r.code + '\n') + body;
+}
+
+// Refuses to stage or commit many files at once when protected files (keys, .env, credentials) would be included.
+async function guardBroadStage(args, cwd) {
+  if (!commitguard.isBroadStage(args)) return;
+  const status = await cli('git', ['status', '--porcelain', '--untracked-files=all'], cwd);
+  const risky = commitguard.protectedInStatus(status, cfg().get('protectedPaths', []));
+  if (risky.length) throw new Error('Refusing: this would stage protected files: ' + risky.join(', ') + '. Add them to .gitignore, or stage specific files one by one.');
+}
+
+// Windows will not move or delete a folder that a program is sitting in, so close bridge terminals inside it first.
+async function releaseTerminalsIn(paths) {
+  const inside = (child, parent) => {
+    const r = path.relative(parent, child);
+    return r === '' || (!r.startsWith('..') && !path.isAbsolute(r));
+  };
+  let closed = 0;
+  for (const [k, e] of [...terms]) {
+    if (e.cwd && paths.some(p => inside(e.cwd, p))) {
+      try { e.t.dispose(); } catch {}
+      terms.delete(k);
+      closed++;
+    }
+  }
+  if (closed) await sleep(700);
 }
 
 function getText(p) {
@@ -247,12 +273,15 @@ async function termRun(command, opts) {
     command = termutil.withCwd(command, want, termutil.shellKind(vscode.env.shell));
     e.cwd = want;
   }
+  const snapDir = e.cwd;
+  const before = ledgerlib.snapshot(snapDir);
   exec = si.executeCommand(command);
   (async () => {
     for await (const c of exec.read()) { e.buf += c; if (e.buf.length > 200000) e.buf = e.buf.slice(-100000); }
   })().catch(() => {});
   const code = await Promise.race([ended, sleep(timeout * 1000).then(() => 'timeout')]);
   await sleep(300);
+  for (const n of ledgerlib.newEntries(before, ledgerlib.snapshot(snapDir))) ledger.add(path.join(snapDir, n), 'terminal_run');
   const text = clean(e.buf).trim().slice(-20000);
   if (code === 'timeout') return 'Still running after ' + timeout + 's (use terminal_read / terminal_interrupt). Output so far:\n' + text;
   return 'exit code: ' + (code === undefined ? 'unknown' : code) + '\n' + text;
@@ -330,6 +359,7 @@ tool('move_path', 'Move/rename a file or folder (VS Code updates imports where i
   { src: P, dest: P, overwrite: bool('Default false') }, ['src', 'dest'], async ({ src, dest, overwrite = false }) => {
     fs.mkdirSync(path.dirname(abs(dest)), { recursive: true });
     const e = new vscode.WorkspaceEdit();
+    await releaseTerminalsIn([abs(src)]);
     e.renameFile(uri(src), uri(dest), { overwrite });
     if (!(await vscode.workspace.applyEdit(e))) throw new Error('Move failed');
     ledger.renamePrefix(abs(src), abs(dest));
@@ -348,6 +378,7 @@ tool('delete_path', 'Delete a file or folder (moved to the trash, so it is recov
     const t = abs(p);
     if (t === path.parse(t).root || same(t, os.homedir())) throw new Error('Refusing to delete a drive root or the home folder');
     if (!fs.existsSync(t)) throw new Error('Not found: ' + t);
+    await releaseTerminalsIn([t]);
     await vscode.workspace.fs.delete(vscode.Uri.file(t), { recursive, useTrash: true });
     return 'Moved to trash: ' + t;
   });
@@ -474,7 +505,7 @@ tool('git_diff', 'git diff, optionally for one path or staged changes.', { cwd: 
 tool('git_log', 'Recent commits.', { cwd: P, n: num('Default 10') }, [], async ({ cwd, n = 10 }) => cli('git', ['log', '--oneline', '--decorate', '-n', String(n)], cwd));
 tool('git_commit', 'Stage everything (unless add_all=false) and commit.', { cwd: P, message: str('Commit message'), add_all: bool('Default true') }, ['message'],
   async ({ cwd, message, add_all = true }) => {
-    if (add_all) await cli('git', ['add', '-A'], cwd);
+    if (add_all) { await guardBroadStage(['add', '-A'], cwd); await cli('git', ['add', '-A'], cwd); }
     return cli('git', ['commit', '-m', message], cwd);
   });
 tool('checkpoint', 'Save a restorable snapshot of tracked changes as a git stash entry without touching the working tree. Use before big edits.', { cwd: P, label: str('') }, ['label'],
@@ -486,7 +517,7 @@ tool('checkpoint', 'Save a restorable snapshot of tracked changes as a git stash
     return 'Checkpoint saved: ' + sha.slice(0, 8) + ' (see git stash list)';
   });
 tool('git', 'Run any git command with an args array, e.g. ["checkout","-b","feature"]. Risky ones (push, reset, clean, rebase, restore...) need approval.',
-  { args: { type: 'array', items: { type: 'string' } }, cwd: P }, ['args'], async ({ args, cwd }) => cli('git', args, cwd, 300000));
+  { args: { type: 'array', items: { type: 'string' } }, cwd: P }, ['args'], async ({ args, cwd }) => { await guardBroadStage(args, cwd); return cli('git', args, cwd, 300000); });
 tool('gh', 'Run the GitHub CLI with an args array, e.g. ["pr","list"]. Needs gh installed and logged in. Non-read-only commands need approval.',
   { args: { type: 'array', items: { type: 'string' } }, cwd: P }, ['args'], async ({ args, cwd }) => cli('gh', args, cwd, 300000));
 
@@ -528,7 +559,7 @@ tool('debug_start', 'Start debugging with a launch.json config name, or an inlin
 tool('debug_stop', 'Stop the debug session.', {}, [], async () => { await vscode.debug.stopDebugging(); return 'Stopped'; });
 
 // ---------- TOOLS: session cleanup and instructions ----------
-tool('list_session_files', 'List files and folders this bridge created during this session that still exist. Call it before you finish, and move temporary or test files to the trash with cleanup_session. Never clean up real deliverables the user asked for.', {}, [], async () => {
+tool('list_session_files', 'List files and folders this bridge created during this session that still exist. Call it before you finish, and move temporary or test files to the trash with cleanup_session. Never clean up real deliverables the user asked for; mark them with keep_session_files instead.', {}, [], async () => {
   const items = ledger.list();
   if (!items.length) return 'No files created by the bridge are left over.';
   return items.map(i => i.path + '  (' + i.tool + ', ' + i.ageMinutes + ' min ago)').join(String.fromCharCode(10));
@@ -540,10 +571,19 @@ tool('cleanup_session', 'Move files or folders that the bridge created during th
     const bad = ledger.untracked(full);
     if (bad.length) throw new Error('Refusing: not created by the bridge in this session: ' + bad.join(', '));
     for (const t of full) {
-      if (fs.existsSync(t)) await vscode.workspace.fs.delete(vscode.Uri.file(t), { recursive: true, useTrash: true });
+      if (fs.existsSync(t)) { await releaseTerminalsIn([t]); await vscode.workspace.fs.delete(vscode.Uri.file(t), { recursive: true, useTrash: true }); }
       ledger.remove(t);
     }
     return 'Moved to trash: ' + full.join(', ');
+  });
+tool('keep_session_files', 'Mark files or folders you created on purpose (real deliverables the user asked for) as kept, so they are no longer listed as leftovers. Pass the exact paths from list_session_files. Deletes nothing.',
+  { paths: { type: 'array', items: { type: 'string' }, description: 'Exact paths from list_session_files' } }, ['paths'], async ({ paths }) => {
+    const full = (paths || []).map(abs);
+    if (!full.length) throw new Error('No paths given');
+    const bad = ledger.untracked(full);
+    if (bad.length) throw new Error('Not in the session list: ' + bad.join(', '));
+    for (const t of full) ledger.remove(t);
+    return 'No longer listed as leftovers: ' + full.join(', ');
   });
 tool('get_instructions', 'Returns the rules the user set for how you must work in their VS Code: terminals, approvals, cleanup and their own rules. Call it once at the start of a session.', {}, [], async () => buildInstructions());
 
@@ -601,9 +641,9 @@ const GATES = {
   extension_uninstall: a => ({ level: 'high', summary: 'Uninstall extension: ' + a.id }),
   run_vscode_command: a => ({ level: 'high', summary: 'Run VS Code command: ' + a.command + ' ' + JSON.stringify(a.args || []).slice(0, 200) }),
   update_setting: a => (a.scope === 'user' ? { level: 'chat', summary: 'Change USER setting ' + a.key + ' = ' + JSON.stringify(a.value) } : null),
-  git: a => (DANGEROUS_GIT.test((a.args || []).join(' ')) ? { level: 'high', summary: 'git ' + (a.args || []).join(' ') + ' (in ' + abs(a.cwd) + ')' } : null),
+  git: a => ((DANGEROUS_GIT.test((a.args || []).join(' ')) || safety.commandTouchesProtected((a.args || []).join(' '), cfg().get('protectedPaths', []))) ? { level: 'high', summary: 'git ' + (a.args || []).join(' ') + ' (in ' + abs(a.cwd) + ')' } : null),
   gh: a => (GH_READ.includes((a.args || [])[1]) ? null : { level: 'high', summary: 'gh ' + (a.args || []).join(' ') }),
-  terminal_run: a => (BLOCK.test(a.command || '') ? { level: 'high', summary: 'Risky command: ' + a.command } : null),
+  terminal_run: a => (BLOCK.test(a.command || '') ? { level: 'high', summary: 'Risky command: ' + a.command } : (safety.commandTouchesProtected(a.command, cfg().get('protectedPaths', [])) ? { level: 'high', summary: 'Command touches a PROTECTED path (credentials or keys): ' + a.command } : null)),
   write_file: guard(['path'], true),
   append_file: guard(['path'], true),
   edit_file: guard(['path'], true),
@@ -706,7 +746,7 @@ function buildInstructions() {
     '- Every call is written to an audit log that the user can open.',
     '',
     'KEEP THE WORKSPACE CLEAN',
-    '- Do not leave scratch or test files behind. Before you finish, call list_session_files and move temporary or test files you created to the trash with cleanup_session (it needs approval). Never clean up files the user asked you to create.',
+    '- Do not leave scratch or test files behind. Before you finish, call list_session_files and move temporary or test files you created to the trash with cleanup_session (it needs approval). Never clean up files the user asked you to create; mark real deliverables with keep_session_files so they are not listed as leftovers.',
     '- Work inside the user\'s project folder. Ask before writing elsewhere.',
     '- Prefer edit_file over rewriting whole files. Use batch for multi-step work. Keep outputs small.',
     '- Finish with a short summary of what you changed.',
@@ -864,9 +904,11 @@ function activate(ctx) {
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusItem.tooltip = 'MCP Bridge is running. Click to pause or resume AI access.';
   statusItem.command = 'mcpBridge.togglePause';
+  paused = ctx.workspaceState.get('mcpBridge.paused', false);
   statusItem.text = idleText();
   statusItem.show();
   started = Date.now();
+  if (paused) vscode.window.showWarningMessage('MCP Bridge is still paused in this window (you paused it earlier). Click MCP Bridge in the status bar to resume.');
   focusedAt = vscode.window.state.focused ? Date.now() : 0;
 
   if (!vscode.workspace.isTrusted) {
@@ -909,6 +951,7 @@ function activate(ctx) {
     vscode.commands.registerCommand('mcpBridge.showAuditLog', () => safety.openAudit(vscode)),
     vscode.commands.registerCommand('mcpBridge.togglePause', () => {
       paused = !paused;
+      ctx.workspaceState.update('mcpBridge.paused', paused);
       statusItem.text = idleText();
       publish();
       safety.audit({ tool: '(user)', args: {}, ok: true, note: paused ? 'paused' : 'resumed' });

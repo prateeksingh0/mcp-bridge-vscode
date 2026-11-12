@@ -85,4 +85,21 @@ function createLedger(file, now = () => Date.now()) {
   };
 }
 
-module.exports = { createLedger, firstMissing, normKey };
+// Names of the entries directly inside a folder (ignoring .git), or null if it cannot be read or is huge.
+// Used to notice what a terminal command created in its folder.
+function snapshot(dir, limit = 3000) {
+  try {
+    const names = fs.readdirSync(dir).filter(n => n !== '.git');
+    return names.length > limit ? null : new Set(names);
+  } catch {
+    return null;
+  }
+}
+
+// Names that are in `after` but were not in `before`.
+function newEntries(before, after) {
+  if (!before || !after) return [];
+  return [...after].filter(n => !before.has(n));
+}
+
+module.exports = { createLedger, firstMissing, normKey, snapshot, newEntries };

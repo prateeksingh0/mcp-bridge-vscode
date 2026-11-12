@@ -2,7 +2,7 @@
   "name": "mcp-bridge-vscode",
   "displayName": "MCP Bridge for VS Code",
   "description": "Let an MCP client (such as Claude Desktop) work in VS Code: files, a visible terminal, git, diagnostics and more, with approvals for risky actions.",
-  "version": "0.6.1",
+  "version": "0.7.2",
   "publisher": "local",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/prateeksingh0/mcp-bridge-vscode.git" },

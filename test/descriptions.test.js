@@ -33,7 +33,7 @@ for (const [name, re] of Object.entries(required)) {
 }
 
 test('the session cleanup and instruction tools exist', () => {
-  for (const name of ['list_session_files', 'cleanup_session', 'get_instructions']) {
+  for (const name of ['list_session_files', 'cleanup_session', 'keep_session_files', 'get_instructions']) {
     assert.ok(src.includes("tool('" + name + "'"), name + ' is missing');
   }
 });

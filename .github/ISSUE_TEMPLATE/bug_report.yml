@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please remove secrets, tokens and private paths from anything you paste.
+  - type: input
+    id: version
+    attributes:
+      label: MCP Bridge version
+      description: Shown in the Extensions view, or run `code --list-extensions --show-versions`.
+      placeholder: "0.7.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system, VS Code version and Claude Desktop version
+      placeholder: "Windows 11, VS Code 1.146, Claude Desktop 1.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Setting mcpBridge.shimRuntime
+      options:
+        - vscode (default)
+        - node
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you ask the AI to do, and what went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of "MCP Bridge: Show Log", or relevant lines from the audit log. Remove anything private.
+      render: text
