@@ -4,7 +4,9 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const cp = require('child_process');
+const termutil = require('./termutil');
+const search = require('./search');
+const runner = require('./runner');
 const crypto = require('crypto');
 const safety = require('./safety');
 const claudeConfig = require('./claudeconfig');
@@ -88,19 +90,10 @@ async function confirm(msg) {
   if (pick !== 'Allow') throw new Error('Denied (or no answer) in VS Code');
 }
 
-function sh(file, args, cwd, timeout = 60000) {
-  return new Promise(resolve => {
-    cp.execFile(file, args, { cwd, timeout, maxBuffer: 20 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
-      resolve({
-        code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
-        missing: !!err && err.code === 'ENOENT',
-        stdout: String(stdout || ''),
-        stderr: String(stderr || ''),
-      }));
-  });
-}
+// Every command goes through a visible, command-named VS Code terminal (see runner.js). Nothing runs hidden.
+const sh = runner.makeSh({ vscode, termRun: (command, opts) => termRun(command, opts), termutil, path });
 async function cli(file, args, cwd, timeout) {
-  const r = await sh(file, args, abs(cwd), timeout);
+  const r = await sh(file, file === 'git' ? ['--no-pager', ...args] : args, abs(cwd), timeout);
   if (r.missing) throw new Error(file + ' not found on PATH');
   const body = (r.stdout + r.stderr).trim() || '(no output)';
   return (r.code === 0 ? '' : 'exit code ' + r.code + '\n') + body;
@@ -149,14 +142,7 @@ function walk(dir, depth, max, outl, base) {
   }
 }
 
-function rgPath() {
-  const exe = process.platform === 'win32' ? 'rg.exe' : 'rg';
-  for (const sub of ['node_modules/@vscode/ripgrep/bin', 'node_modules.asar.unpacked/@vscode/ripgrep/bin']) {
-    const p = path.join(vscode.env.appRoot, sub, exe);
-    if (fs.existsSync(p)) return p;
-  }
-  return 'rg';
-}
+
 
 const fmtLoc = l => {
   const u = l.targetUri || l.uri;
@@ -182,19 +168,28 @@ function makeRoom() {
     terms.delete(idle[0]);
   }
 }
-function getTerm(name, cwd) {
+function getTerm(name, cwd, title) {
   let e = terms.get(name);
-  if (!e || e.t.exitStatus || (cwd && e.cwd && cwd !== e.cwd && !e.running)) {
+  if (!e || e.t.exitStatus) {
     if (e && !e.t.exitStatus) e.t.dispose();
     terms.delete(name);
     makeRoom();
     const dir = cwd || root();
-    const t = vscode.window.createTerminal({ name: name === 'main' ? 'MCP Bridge' : 'MCP Bridge: ' + name, cwd: dir });
-    e = { t, cwd: dir, buf: '', running: false, last: Date.now() };
+    const t = vscode.window.createTerminal({ name: title || (name === 'main' ? 'MCP Bridge' : 'MCP Bridge: ' + name), cwd: dir });
+    e = { t, cwd: dir, title, buf: '', running: false, last: Date.now() };
     terms.set(name, e);
   }
   e.last = Date.now();
   return e;
+}
+// Terminal titles follow the command being run. VS Code has no API to rename a terminal directly,
+// so the terminal is selected and renamed through its rename command.
+async function renameTerm(e, title) {
+  try {
+    e.t.show(true);
+    await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name: title });
+  } catch {}
+  e.title = title;
 }
 function waitSI(t, ms) {
   return new Promise(resolve => {
@@ -205,9 +200,10 @@ function waitSI(t, ms) {
     });
   });
 }
-async function acquire(name, cwd) {
+async function acquire(name, cwd, title) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const e = getTerm(name, cwd);
+    const e = getTerm(name, cwd, title);
+    if (title && e.title !== title) await renameTerm(e, title);
     e.t.show(true);
     const si = e.t.shellIntegration || (await waitSI(e.t, attempt === 0 ? 20000 : 15000));
     if (si) return { e, si };
@@ -223,11 +219,12 @@ function withVenv(cmd, venv) {
   return "export VIRTUAL_ENV='" + v + "'; export PATH='" + bin + "':\"$PATH\"; " + cmd;
 }
 async function termRun(command, opts) {
-  const { cwd, name = 'main', timeout = 60, venv } = opts;
+  const { cwd, name = 'main', timeout = 60, venv, label } = opts;
+  const title = 'MCP: ' + termutil.labelFor(label || command);
   if (venv) command = withVenv(command, venv);
   const ex = terms.get(name);
   if (ex && ex.running) throw new Error('Terminal "' + name + '" is still running a command. Use terminal_read, terminal_interrupt, or another name.');
-  const { e, si } = await acquire(name, cwd ? abs(cwd) : undefined);
+  const { e, si } = await acquire(name, cwd ? abs(cwd) : undefined, title);
   if (!si) {
     e.t.sendText(command);
     return 'WARNING: output NOT captured. VS Code shell integration did not start in terminal "' + name + '" (waited about 35s). The command was sent to that terminal and may still be running. Check the terminal panel, or verify the result through files.';
@@ -240,6 +237,11 @@ async function termRun(command, opts) {
       if (ev.execution === exec) { d.dispose(); e.running = false; resolve(ev.exitCode); }
     });
   });
+  const want = cwd ? abs(cwd) : undefined;
+  if (want && e.cwd !== want) {
+    command = termutil.withCwd(command, want, termutil.shellKind(vscode.env.shell));
+    e.cwd = want;
+  }
   exec = si.executeCommand(command);
   (async () => {
     for await (const c of exec.read()) { e.buf += c; if (e.buf.length > 200000) e.buf = e.buf.slice(-100000); }
@@ -256,7 +258,7 @@ tool('get_workspace', 'Overview: workspace folders, active file, open tabs, term
   const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
   const active = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.document.uri.fsPath : null;
   const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs.map(t => t.input && t.input.uri && t.input.uri.fsPath).filter(Boolean));
-  const branch = folders[0] ? (await sh('git', ['rev-parse', '--abbrev-ref', 'HEAD'], folders[0])).stdout.trim() : null;
+  const branch = folders[0] ? termutil.gitBranch(folders[0]) : null;
   return { pid: process.pid, folders, active, tabs, terminals: [...terms.keys()], branch, trusted: vscode.workspace.isTrusted, platform: process.platform, shell: vscode.env.shell, vscode: vscode.version };
 });
 tool('open_folder', 'Open a folder in VS Code. Reuses the current window unless new_window is true.',
@@ -339,16 +341,10 @@ tool('delete_path', 'Delete a file or folder (moved to the trash, so it is recov
     await vscode.workspace.fs.delete(vscode.Uri.file(t), { recursive, useTrash: true });
     return 'Moved to trash: ' + t;
   });
-tool('search', 'Search text in files with ripgrep.',
+tool('search', 'Search text in files with the built-in search (no external program).',
   { query: str('Text or regex'), path: P, glob: str('e.g. *.py'), regex: bool('Treat query as regex'), ignore_case: bool(''), max: num('Max lines, default 100') }, ['query'],
   async ({ query, path: p, glob, regex = false, ignore_case = false, max = 100 }) => {
-    const args = ['--line-number', '--no-heading', '--color', 'never', '--max-count', '20'];
-    if (!regex) args.push('--fixed-strings');
-    if (ignore_case) args.push('-i');
-    if (glob) args.push('--glob', glob);
-    args.push('--', query, abs(p));
-    const r = await sh(rgPath(), args, root());
-    if (r.missing) throw new Error('ripgrep (rg) not found. Install it and add it to PATH.');
+    const r = { stdout: search.searchText({ base: abs(p), query, regex, ignoreCase: ignore_case, glob, max }).join(String.fromCharCode(10)) };
     return r.stdout.split('\n').slice(0, max).join('\n') || 'No matches';
   });
 
@@ -472,7 +468,7 @@ tool('git_commit', 'Stage everything (unless add_all=false) and commit.', { cwd:
 tool('checkpoint', 'Save a restorable snapshot of tracked changes as a git stash entry without touching the working tree. Use before big edits.', { cwd: P, label: str('') }, ['label'],
   async ({ cwd, label }) => {
     const r = await sh('git', ['stash', 'create'], abs(cwd));
-    const sha = r.stdout.trim();
+    const sha = termutil.extractSha(r.stdout);
     if (!sha) return 'Nothing to checkpoint (no changes to tracked files)';
     await cli('git', ['stash', 'store', '-m', 'checkpoint: ' + label, sha], cwd);
     return 'Checkpoint saved: ' + sha.slice(0, 8) + ' (see git stash list)';
@@ -660,7 +656,7 @@ function buildInstructions() {
     '- Do not open new windows. open_folder reuses the current window unless the user asks for a new one.',
     '',
     'TERMINALS',
-    '- Run every command with terminal_run so the user can watch it. Reuse the default "main" terminal. Use a separate name only for long-running processes (dev servers) and close them with terminal_close when done. At most ' + cfg().get('maxTerminals', 3) + ' terminals.',
+    '- Run every command with terminal_run so the user can watch it. Never run commands any other way: the git, gh and venv tools also type their command into a visible terminal, and each terminal is titled after its command. Reuse the default "main" terminal. Use a separate name only for long-running processes (dev servers) and close them with terminal_close when done. At most ' + cfg().get('maxTerminals', 3) + ' terminals.',
     '- Shell: ' + shell + '. ' + hint,
     '- If a result says output was NOT captured, do not assume success. Verify through files or rerun.',
     '',

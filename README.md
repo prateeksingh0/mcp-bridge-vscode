@@ -17,7 +17,7 @@ Recommendations: use it in projects under version control, keep approvals on, do
 ## Features
 
 - About 50 tools: files (read, write, edit, move, copy, delete to trash), search, a live terminal, git and GitHub CLI, diagnostics, go to definition, references, rename, tasks, debugging, extensions, settings and any VS Code command.
-- **Every command runs in a visible VS Code terminal.** Output and exit code go back to the AI.
+- **Every command runs in a visible VS Code terminal, with no hidden processes.** That includes git, the GitHub CLI and virtualenv commands. Each terminal is titled after what it runs (for example "MCP: git status"), and the output and exit code go back to the AI. The only program the bridge starts outside a terminal is VS Code itself, when the small shim has to open it because it is closed. A test in the repository fails if hidden process code is ever added.
 - **Several windows:** each VS Code window registers itself. `list_windows` shows them and any tool can pick one with `target`.
 - **Safety:** approvals, a pause switch, an audit log, secret redaction and protected paths.
 - Works with Restricted Mode: tools stay off in untrusted folders.
@@ -125,7 +125,7 @@ npx @vscode/vsce package --allow-missing-repository
 
 - `extension.js`: the VS Code side (tools, approvals, status bar, commands)
 - `shim.js`: the MCP server that Claude Desktop runs over stdio
-- `safety.js`, `claudeconfig.js`: pure helpers with tests in `test/`
+- `safety.js`, `claudeconfig.js`, `termutil.js`, `search.js`, `runner.js`: helpers with tests in `test/`
 
 ## License
 
