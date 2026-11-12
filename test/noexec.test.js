@@ -19,6 +19,6 @@ for (const file of ['extension.js', 'safety.js', 'claudeconfig.js', 'termutil.js
 test('shim.js only starts VS Code itself, and nothing else', () => {
   const src = fs.readFileSync(path.join(root, 'shim.js'), 'utf8');
   assert.equal((src.match(/\bspawn\(/g) || []).length, 1);
-  assert.match(src, /spawn\('code'/);
+  assert.ok(src.includes('spawn(launchCommand,'));
   assert.ok(!/\bexec(File)?(Sync)?\(/.test(src));
 });

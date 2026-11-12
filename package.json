@@ -2,7 +2,7 @@
   "name": "mcp-bridge-vscode",
   "displayName": "MCP Bridge for VS Code",
   "description": "Let an MCP client (such as Claude Desktop) work in VS Code: files, a visible terminal, git, diagnostics and more, with approvals for risky actions.",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "publisher": "local",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/prateeksingh0/mcp-bridge-vscode.git" },
@@ -73,6 +73,17 @@
           "default": "",
           "editPresentation": "multilineText",
           "description": "Your own rules for the AI, one per line (for example: Always ask before git push). They are added to the bridge's instructions. They cannot switch off approvals or protections, which the extension enforces itself. Takes effect the next time Claude Desktop connects (restart it)."
+        },
+        "mcpBridge.shimRuntime": {
+          "type": "string",
+          "scope": "machine",
+          "default": "vscode",
+          "enum": ["vscode", "node"],
+          "enumDescriptions": [
+            "Run the bridge shim with VS Code's own runtime. No Node.js install needed (recommended).",
+            "Run the shim with the node program found on PATH."
+          ],
+          "description": "Which runtime Claude Desktop uses to start the bridge shim. Applies the next time you run MCP Bridge: Connect to Claude Desktop."
         },
         "mcpBridge.maxTerminals": { "type": "number", "default": 3, "minimum": 1, "maximum": 10, "description": "Maximum terminals the bridge keeps open." },
         "mcpBridge.idleMinutes": { "type": "number", "default": 30, "minimum": 1, "description": "Close bridge terminals idle for this many minutes." }

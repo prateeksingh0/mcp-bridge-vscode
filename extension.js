@@ -264,7 +264,7 @@ tool('get_workspace', 'Overview: workspace folders, active file, open tabs, term
   const active = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.document.uri.fsPath : null;
   const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs.map(t => t.input && t.input.uri && t.input.uri.fsPath).filter(Boolean));
   const branch = folders[0] ? termutil.gitBranch(folders[0]) : null;
-  return { pid: process.pid, folders, active, tabs, terminals: [...terms.keys()], sessionFiles: ledger.list().length, branch, trusted: vscode.workspace.isTrusted, platform: process.platform, shell: vscode.env.shell, vscode: vscode.version };
+  return { pid: process.pid, folders, active, tabs, terminals: [...terms.keys()], sessionFiles: ledger.list().length, runtime: { execPath: process.execPath, node: process.versions.node, electron: process.versions.electron }, branch, trusted: vscode.workspace.isTrusted, platform: process.platform, shell: vscode.env.shell, vscode: vscode.version };
 });
 tool('open_folder', 'Open a folder in VS Code. Reuses the current window unless new_window is true. Do not open new windows unless the user asks.',
   { path: P, new_window: bool('Default false') }, ['path'], async ({ path: p, new_window = false }) => {
@@ -807,7 +807,7 @@ async function connectClaudeDesktop(ctx) {
   }
   fs.copyFileSync(cfgPath, cfgPath + '.bak');
   conf.mcpServers = conf.mcpServers || {};
-  conf.mcpServers['vscode-bridge'] = { command: 'node', args: [shim] };
+  conf.mcpServers[claudeConfig.NAME] = claudeConfig.makeEntry({ runtime: cfg().get('shimRuntime', 'vscode'), execPath: process.execPath, shimPath: shim });
   fs.writeFileSync(cfgPath, JSON.stringify(conf, null, 2));
   vscode.window.showInformationMessage('Connected (backup saved as .bak). Fully quit and reopen Claude Desktop.');
 }
@@ -842,6 +842,23 @@ async function disconnectClaudeDesktop() {
   vscode.window.showInformationMessage('Disconnected (backup saved as .bak). Fully quit and reopen Claude Desktop. To remove MCP Bridge completely, also uninstall the extension and delete the .mcp-bridge folder in your home folder.');
 }
 
+// If the Claude Desktop entry runs a program by full path that no longer exists (for example VS Code was moved),
+// offer to repair it with the Connect command.
+function checkConfigHealth(ctx) {
+  try {
+    for (const f of findConfigs()) {
+      let conf;
+      try { conf = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { continue; }
+      const e = conf.mcpServers && conf.mcpServers[claudeConfig.NAME];
+      if (e && claudeConfig.isOurEntry(e) && claudeConfig.isStaleEntry(e, fs.existsSync)) {
+        vscode.window.showWarningMessage('MCP Bridge: the Claude Desktop entry points to a program that no longer exists (' + e.command + '). Update it?', 'Update')
+          .then(c => { if (c) connectClaudeDesktop(ctx); });
+        return;
+      }
+    }
+  } catch {}
+}
+
 function activate(ctx) {
   out = vscode.window.createOutputChannel('MCP Bridge');
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -867,6 +884,8 @@ function activate(ctx) {
   const server = http.createServer((req, res) => handle(req, res).catch(() => { try { res.writeHead(500); res.end(); } catch {} }));
   server.on('error', e => log('server error: ' + e.message));
   server.listen(0, '127.0.0.1', () => { port = server.address().port; publish(); log('listening on ' + port); });
+
+  setTimeout(() => checkConfigHealth(ctx), 5000);
 
   const sweep = setInterval(() => {
     const ms = cfg().get('idleMinutes', 30) * 60000;

@@ -27,8 +27,8 @@ Recommendations: use it in projects under version control, keep approvals on, do
 
 - VS Code 1.93 or newer.
 - Claude Desktop.
-- Node.js on your PATH (Claude Desktop runs a small Node script, the "shim").
-- Optional: the `code` command on PATH, so the shim can start VS Code if it is closed.
+- Nothing else by default. Claude Desktop starts the bridge's small script (the "shim") with VS Code's own built-in runtime, so Node.js does not need to be installed. If you set `mcpBridge.shimRuntime` to `node`, Node.js must be on your PATH.
+- Optional: the `code` command on PATH. With the default runtime the shim starts VS Code by itself when it is closed, so you only need `code` on PATH if `mcpBridge.shimRuntime` is `node`.
 
 Tested on Windows 11. macOS and Linux paths are written but **not tested yet**.
 
@@ -82,9 +82,45 @@ The bridge tells the AI how to behave in your VS Code. There are four layers, be
 1. **Enforced by the extension** (works whatever the AI does): approvals, pause, protected paths, secret redaction, and every command running in a visible terminal.
 2. **Rules inside the tool descriptions.** The AI always sees these, for example "delete temporary files you create" on the file tools.
 3. **The instructions**, written to `~/.mcp-bridge/instructions.txt` and sent when Claude Desktop connects. The AI can also read them on demand with the `get_instructions` tool.
-4. **Your own rules:** type them, one per line, in the setting `mcpBridge.extraInstructions` (user settings only). They are added to the instructions, but they cannot switch off approvals or protections.
+4. **Your own rules** (step by step in [Set your own rules](#set-your-own-rules) below): type them, one per line, in the setting `mcpBridge.extraInstructions` (user settings only). They are added to the instructions, but they cannot switch off approvals or protections.
 
 **Keeping the workspace clean.** The bridge remembers files and folders it creates. `list_session_files` shows what is left, and `cleanup_session` moves the ones you approve to the trash. It refuses any path the bridge did not create. Files created by shell commands are not tracked.
+
+### Set your own rules
+
+You can add rules in your own words, such as "Ask me before running git push" or "Use pnpm, not npm". They are saved in your VS Code **user** settings.
+
+**Where to set them**
+
+1. Open Settings with `Ctrl+,` (macOS: `Cmd+,`) and stay on the **User** tab.
+2. Search for `extraInstructions`. The setting is called **Mcp Bridge: Extra Instructions** and is a multi-line box.
+3. Type one rule per line.
+
+![The Mcp Bridge: Extra Instructions setting in VS Code Settings, User tab](docs/images/setting.png)
+
+Or edit `settings.json` directly. Press `Ctrl+Shift+P`, run **Preferences: Open User Settings (JSON)**, and add:
+
+```json
+"mcpBridge.extraInstructions": "Ask me before running git push\nUse pnpm, not npm\nReply in short bullet points"
+```
+
+The file lives at `%APPDATA%\Code\User\settings.json` on Windows, `~/Library/Application Support/Code/User/settings.json` on macOS and `~/.config/Code/User/settings.json` on Linux.
+
+**Make it take effect**
+
+VS Code updates the bridge's instructions file straight away, but Claude Desktop only reads it when it connects. Fully quit and reopen Claude Desktop, then start a new chat.
+
+**Check that it worked**
+
+- Open `~/.mcp-bridge/instructions.txt`. Your lines appear at the end, under **USER RULES**.
+- Or ask the AI in a new chat what rules the vscode-bridge server gave it.
+
+**Good to know**
+
+- It has to be a user setting. The setting is machine-scoped, so a project you open cannot add rules to your AI.
+- Up to 30 rules of 300 characters each. Short, specific rules work best.
+- Your rules are requests, not locks. They cannot switch off approvals, pause or protected paths, which the extension enforces itself. For a hard block, use `mcpBridge.protectedPaths` or `mcpBridge.approvalMode`.
+- The built-in rules (terminals, approvals, cleanup) are part of the extension. The AI can read the full set at any time with the `get_instructions` tool.
 
 **Check that your client delivers the instructions.** Start a new chat and ask: "What is the vscode-bridge check phrase?" If the AI answers `copper-lantern-4821`, it received the instructions. If not, it relies on the tool descriptions and `get_instructions`.
 
@@ -97,6 +133,7 @@ The bridge tells the AI how to behave in your VS Code. There are four layers, be
 | `mcpBridge.allowInUntrustedWorkspace` | `false` | Let tools run in Restricted Mode (not recommended) |
 | `mcpBridge.redactSecrets` | `true` | Mask secrets in tool output |
 | `mcpBridge.protectedPaths` | `[]` | Extra protected paths or patterns (`*` wildcard) |
+| `mcpBridge.shimRuntime` | `vscode` | `vscode` runs the shim with VS Code's own runtime (no Node needed), `node` uses Node from PATH (user settings only) |
 | `mcpBridge.extraInstructions` | empty | Your own rules for the AI, one per line (user settings only) |
 | `mcpBridge.maxTerminals` | `3` | Maximum terminals the bridge keeps open |
 | `mcpBridge.idleMinutes` | `30` | Close idle bridge terminals after this long |
@@ -118,6 +155,7 @@ The security-related settings are machine-scoped, so a project's own `.vscode/se
 - **Wrong window:** call `list_windows`, then pass `target` (a folder path or pid). By default the most recently focused window is used.
 - **"Output NOT captured":** VS Code's shell integration had not started in that terminal, which can happen right after a window opens. The command still ran. Check the terminal or verify through files.
 - **Connect command picked the wrong file:** it refuses any file not named `claude_desktop_config.json`. If it cannot find your config, choose the file by hand when asked.
+- **Claude Desktop shows the vscode-bridge server as failed, or no tools appear after connecting:** set `mcpBridge.shimRuntime` to `node` in your user settings, run **MCP Bridge: Connect to Claude Desktop** again, and restart Claude Desktop. This needs Node.js on your PATH. If VS Code was moved or reinstalled, the extension also offers to repair the entry when it starts.
 - **Windows PowerShell 5.1:** chain commands with `;` instead of `&&`.
 
 ## Uninstall

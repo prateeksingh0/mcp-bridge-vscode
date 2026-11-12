@@ -12,6 +12,7 @@ const TOOLS = path.join(DIR, 'tools.json');
 const INSTR = path.join(DIR, 'instructions.txt');
 const VERSION = '0.3.0';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const pending = new Set(); // requests that are still being handled
 const byFocus = (a, b) => (b.focusedAt || 0) - (a.focusedAt || 0);
 
 function alive(pid) {
@@ -68,7 +69,15 @@ let launching = null;
 function launchVsCode() {
   if (!launching) {
     launching = (async () => {
-      try { spawn('code', [], { shell: true, detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch {}
+      try {
+        // Inside VS Code's own runtime, start VS Code itself (no "code" command needed).
+        // The variable that makes VS Code behave like Node must not be passed on, or the new process would just exit.
+        const env = { ...process.env };
+        delete env.ELECTRON_RUN_AS_NODE;
+        const viaElectron = !!process.versions.electron;
+        const launchCommand = viaElectron ? process.execPath : 'code';
+        spawn(launchCommand, [], { shell: !viaElectron, detached: true, stdio: 'ignore', windowsHide: true, env }).unref();
+      } catch {}
       for (let i = 0; i < 80; i++) {
         await sleep(500);
         const ws = windows();
@@ -160,7 +169,7 @@ process.stdin.on('data', chunk => {
     const line = buf.slice(0, i).trim();
     buf = buf.slice(i + 1);
     if (!line) continue;
-    try { handle(JSON.parse(line)); } catch (e) { console.error('bad message', e.message); }
+    try { const p = handle(JSON.parse(line)); pending.add(p); p.finally(() => pending.delete(p)); } catch (e) { console.error('bad message', e.message); }
   }
 });
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => { Promise.allSettled([...pending]).then(() => process.exit(0)); });
